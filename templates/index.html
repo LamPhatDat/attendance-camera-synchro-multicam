@@ -1,0 +1,255 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Person Tracking Dashboard</title>
+  <style>
+    *,
+    *::before,
+    *::after {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+    }
+
+    body {
+      background: #0d1117;
+      color: #c9d1d9;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+      min-height: 100vh;
+      padding: 24px;
+    }
+
+    h1 {
+      font-size: 22px;
+      margin-bottom: 20px;
+      color: #f0f6fc;
+    }
+
+    /* One row per camera: stream on the left, its own status panel on the right */
+    .camera-block {
+      display: flex;
+      gap: 24px;
+      flex-wrap: wrap;
+      align-items: flex-start;
+      margin-bottom: 24px;
+    }
+
+    .cam-label {
+      margin-bottom: 12px;
+      font-size: 14px;
+      color: #8b949e;
+    }
+
+    .stream-panel {
+      flex: 1 1 60%;
+      min-width: 320px;
+    }
+
+    .stream-panel img {
+      width: 100%;
+      height: 384px;
+      object-fit: contain;
+      border-radius: 8px;
+      border: 1px solid #30363d;
+      display: block;
+      background: #000;
+    }
+
+    .status-panel {
+      flex: 0 0 300px;
+      background: #161b22;
+      border: 1px solid #30363d;
+      border-radius: 8px;
+      padding: 20px;
+      display: flex;
+      flex-direction: column;
+      gap: 16px;
+    }
+
+    .status-panel h2 {
+      font-size: 16px;
+      color: #f0f6fc;
+      margin-bottom: 4px;
+    }
+
+    .stat-row {
+      display: flex;
+      justify-content: space-between;
+      padding: 4px 0;
+      font-size: 14px;
+      border-bottom: 1px solid #21262d;
+    }
+
+    .stat-row .label {
+      color: #8b949e;
+    }
+
+    .stat-row .value {
+      color: #c9d1d9;
+      font-weight: 600;
+    }
+
+    .badge {
+      display: inline-block;
+      padding: 2px 8px;
+      border-radius: 12px;
+      font-size: 12px;
+      font-weight: 600;
+    }
+
+    .badge-green {
+      background: #1b4721;
+      color: #7ee787;
+    }
+
+    .badge-gray {
+      background: #21262d;
+      color: #8b949e;
+    }
+
+    .subhead {
+      font-size: 13px;
+      margin-bottom: 6px;
+      color: #8b949e;
+    }
+
+    .target-list {
+      list-style: none;
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+    }
+
+    .target-list li {
+      font-size: 13px;
+      padding: 4px 8px;
+      background: #21262d;
+      border-radius: 4px;
+      display: flex;
+      justify-content: space-between;
+    }
+
+    .muted {
+      color: #8b949e;
+      font-style: italic;
+    }
+
+    .note {
+      font-size: 11px;
+      color: #6e7681;
+      margin-top: -8px;
+    }
+  </style>
+</head>
+
+<body>
+  <h1>Person Tracking Dashboard</h1>
+  <div id="dashboard"></div>
+
+  <script>
+    // ── Add/remove cameras here. Each entry gets its own stream + status panel. ──
+    const CAMS = ["cam3"];
+
+    // Build one camera block (stream + status panel) with cam-scoped element ids.
+    function panelTemplate(cam, label) {
+      return `
+  <div class="camera-block">
+    <div class="stream-panel">
+      <div class="cam-label">${label}</div>
+      <img src="/video_feed/${cam}" alt="${label}">
+    </div>
+    <div class="status-panel">
+      <div>
+        <h2>Status — ${label}</h2>
+        <div class="stat-row"><span class="label">Detections</span><span class="value" id="s-detections-${cam}">—</span></div>
+        <div class="stat-row"><span class="label">Tracking</span><span class="value" id="s-tracking-${cam}"><span class="badge badge-gray">Waiting</span></span></div>
+      </div>
+
+      <div>
+        <h2>Linked Targets</h2>
+        <ul class="target-list" id="linked-list-${cam}">
+          <li class="muted">None</li>
+        </ul>
+      </div>
+
+      <div>
+        <h2>Embeddings</h2>
+        <div class="note">Shared across all cameras (one gallery)</div>
+        <div class="subhead" style="margin-top:6px;">Known</div>
+        <ul class="target-list" id="emb-known-${cam}" style="margin-bottom:10px;">
+          <li class="muted">None</li>
+        </ul>
+        <div class="subhead">Unknown</div>
+        <ul class="target-list" id="emb-unknown-${cam}">
+          <li class="muted">None</li>
+        </ul>
+      </div>
+    </div>
+  </div>`;
+    }
+
+    // Render all camera blocks once on load.
+    document.getElementById("dashboard").innerHTML =
+      CAMS.map((cam, i) => panelTemplate(cam, "Camera " + (i + 1))).join("");
+
+    function updateStatus(cam) {
+      fetch(`/status/${cam}`)
+        .then(r => r.json())
+        .then(data => {
+          // Per-camera: detection count
+          const det = document.getElementById(`s-detections-${cam}`);
+          if (det) det.textContent = data.detection_count;
+
+          // Per-camera: which linked targets are visible in THIS camera's frame
+          const trackEl = document.getElementById(`s-tracking-${cam}`);
+          const inFrame = data.linked_in_frame_names || [];
+          if (trackEl) {
+            trackEl.innerHTML = inFrame.length > 0
+              ? `<span class="badge badge-green">${inFrame.join(", ")}</span>`
+              : `<span class="badge badge-gray">Idle</span>`;
+          }
+
+          // Gallery-wide: linked targets (same data for every camera)
+          const linkedUl = document.getElementById(`linked-list-${cam}`);
+          const linkedEntries = Object.entries(data.linked_targets || {});
+          if (linkedUl) {
+            linkedUl.innerHTML = linkedEntries.length === 0
+              ? '<li class="muted">None</li>'
+              : linkedEntries
+                .map(([gid, name]) => `<li><span>${name}</span><span style="color:#8b949e">ID ${gid}</span></li>`)
+                .join("");
+          }
+
+          // Gallery-wide: known embeddings
+          const embKnown = document.getElementById(`emb-known-${cam}`);
+          if (embKnown) {
+            const known = data.embedding_known || [];
+            embKnown.innerHTML = known.length === 0
+              ? '<li class="muted">None</li>'
+              : known
+                .map(e => `<li><span>${e.name}</span><span style="color:#8b949e">${e.slot_count} slot${e.slot_count !== 1 ? "s" : ""}</span></li>`)
+                .join("");
+          }
+
+          // Gallery-wide: unknown embeddings
+          const embUnknown = document.getElementById(`emb-unknown-${cam}`);
+          if (embUnknown) {
+            const unknown = data.embedding_unknown || [];
+            embUnknown.innerHTML = unknown.length === 0
+              ? '<li class="muted">None</li>'
+              : unknown.map(gid => `<li><span>ID ${gid}</span></li>`).join("");
+          }
+        })
+        .catch(() => { });
+    }
+
+    function tick() { CAMS.forEach(updateStatus); }
+    setInterval(tick, 3000);
+    tick();
+  </script>
+</body>
+
+</html>
